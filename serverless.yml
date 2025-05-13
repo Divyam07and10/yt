@@ -1,0 +1,43 @@
+service: youtube-downloader
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: python3.11
+  region: us-east-1
+  environment:
+    S3_BUCKET: ${env:S3_BUCKET, 'my-youtube-videos'}
+    DB_HOST: ${env:DB_HOST}
+    DB_PORT: ${env:DB_PORT, '5432'}
+    DB_NAME: ${env:DB_NAME, 'youtube'}
+    DB_USER: ${env:DB_USER}
+    DB_PASSWORD: ${env:DB_PASSWORD}
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - s3:PutObject
+          Resource: "arn:aws:s3:::${env:S3_BUCKET}/*"
+
+functions:
+  download:
+    handler: handler.lambda_handler
+    events:
+      - httpApi:
+          path: /download
+          method: post
+    timeout: 120
+    memorySize: 2048
+
+package:
+  patterns:
+    - '!**/*'
+    - handler.py
+    - utils/**
+    - config/**
+    - requirements.txt
+
+plugins:
+  - serverless-python-requirements
