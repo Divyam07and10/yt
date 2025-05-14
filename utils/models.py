@@ -1,17 +1,22 @@
-from sqlalchemy import Column, String, Integer, DateTime, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Column, String, Integer, DateTime
 from sqlalchemy.ext.declarative import declarative_base
-import uuid
+from datetime import datetime
 
 Base = declarative_base()
 
 class Video(Base):
     __tablename__ = "videos"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(Integer, primary_key=True, index=True)
+    url = Column(String, unique=True, nullable=False)
     youtube_id = Column(String, nullable=False)
     title = Column(String)
-    duration = Column(Integer)
+    duration = Column(String)
+    views = Column(Integer)
+    likes = Column(Integer, nullable=True)
+    channel = Column(String)
+    thumbnail_url = Column(String)
     resolution = Column(String)
     s3_url = Column(String)
-    created_at = Column(DateTime, default=func.current_timestamp())
+    published_date = Column(String)
+    fetched_at = Column(DateTime, default=datetime.utcnow)

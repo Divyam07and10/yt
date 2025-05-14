@@ -19,6 +19,7 @@ provider:
         - Effect: Allow
           Action:
             - s3:PutObject
+            - s3:GetObject
           Resource: "arn:aws:s3:::${env:S3_BUCKET}/*"
 
 functions:
@@ -28,8 +29,10 @@ functions:
       - httpApi:
           path: /download
           method: post
-    timeout: 120
-    memorySize: 2048
+    timeout: 600
+    memorySize: 4096
+    layers:
+      - arn:aws:lambda:us-east-1:YOUR_ACCOUNT_ID:layer:ffmpeg-layer:1
 
 package:
   patterns:
