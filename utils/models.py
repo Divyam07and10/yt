@@ -8,7 +8,7 @@ class Video(Base):
     __tablename__ = "videos"
 
     id = Column(Integer, primary_key=True, index=True)
-    url = Column(String, unique=True, nullable=False)
+    url = Column(String, nullable=False)
     youtube_id = Column(String, nullable=False)
     title = Column(String)
     duration = Column(String)
@@ -20,3 +20,4 @@ class Video(Base):
     s3_url = Column(String)
     published_date = Column(String)
     fetched_at = Column(DateTime, default=datetime.utcnow)
+    format = Column(String, nullable=False)

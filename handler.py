@@ -1,12 +1,13 @@
 import re
-import os
-import glob
-import asyncio
+import yt_dlp
+import shutil
 from fastapi import HTTPException
-from datetime import datetime
-from utils.youtube import download_video
-from utils.s3 import upload_to_mock_s3
-from utils.db import insert_metadata, check_video_exists
+from celery_config import celery_app
+from tasks import download_video_task
+from utils.storage import check_file_size, check_storage_limit
+from utils.youtube import check_ffmpeg
+from utils.helpers import build_format_selector
+from config.settings import MAX_VIDEO_SIZE
 
 def sanitize_video_id(video_id: str) -> str:
     """Sanitize and validate YouTube video ID."""
@@ -17,68 +18,63 @@ def sanitize_video_id(video_id: str) -> str:
         raise HTTPException(status_code=400, detail="Invalid YouTube video ID length")
     return sanitized_id
 
-async def get_tmp_size() -> int:
-    """Calculate total size of files in /tmp asynchronously."""
-    total_size = 0
-    tmp_path = '/tmp'
-    try:
-        for item in glob.glob(os.path.join(tmp_path, '**/*'), recursive=True):
-            if os.path.isfile(item):
-                total_size += await asyncio.to_thread(os.path.getsize, item)
-    except:
-        raise HTTPException(status_code=500, detail="Failed to calculate /tmp size")
-    return total_size
-
-async def check_storage_limit():
-    """Check if /tmp storage exceeds 512MB limit."""
-    max_tmp_storage = 512 * 1024 * 1024
-    current_size = await get_tmp_size()
-    
-    if current_size >= max_tmp_storage:
-        raise HTTPException(
-            status_code=400,
-            detail=f"/tmp storage full (512 MB limit reached). Current usage: {current_size / 1024 / 1024:.2f} MB"
-        )
+def check_storage_and_size(estimated_size: int = 0):
+    """Check if estimated size exceeds 100MB limit."""
+    if estimated_size > MAX_VIDEO_SIZE:
+        raise HTTPException(status_code=400, detail=f"Estimated video size ({estimated_size / 1024 / 1024:.2f} MB) exceeds 100 MB limit")
     return True
 
-async def download_video_handler(video_id: str, format: str, quality: str):
-    """Handle video download, upload to S3, and store metadata."""
-    await check_storage_limit()
-    
+def get_estimated_size(youtube_url: str, format: str, quality: str, ffmpeg_available: bool) -> int:
+    """Estimate video file size using yt-dlp."""
     try:
+        target_height = 2160 if quality.lower() == "4k" else int(quality.lower().replace("p", ""))
+        format_str = build_format_selector(format, target_height)
+        ydl_opts = {
+            "format": format_str,
+            "simulate": True,
+            "socket_timeout": 30,
+            "quiet": True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(youtube_url, download=False)
+            video_size = info.get("filesize_approx", 0) or info.get("filesize", 0)
+            return video_size if video_size else 0
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to estimate video size: {str(e)}")
+
+async def download_video_handler(video_id: str, format: str, quality: str):
+    """Dispatch video download task to Celery in the background."""
+    try:
+        # Validate video ID
         sanitized_id = sanitize_video_id(video_id)
         youtube_url = f"https://www.youtube.com/watch?v={sanitized_id}"
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        filename = f"/tmp/videos/{sanitized_id}_{timestamp}.{format}"
         
-        # Check if video exists in database
-        if await asyncio.to_thread(check_video_exists, youtube_url):
-            print(f"[download] {filename} has already been downloaded")
-            raise HTTPException(status_code=400, detail=f"Download failed: {filename} has already been downloaded")
+        # Validate FFmpeg for MP3 format
+        ffmpeg_path = shutil.which("ffmpeg") or "/opt/bin/ffmpeg"
+        ffmpeg_available = check_ffmpeg(ffmpeg_path)
+        if format == "mp3" and not ffmpeg_available:
+            raise HTTPException(status_code=400, detail=f"MP3 format requires ffmpeg, which is not available at {ffmpeg_path}")
+
+        # Estimate size and validate
+        estimated_size = get_estimated_size(youtube_url, format, quality, ffmpeg_available)
+        check_storage_and_size(estimated_size=estimated_size)
         
-        filename, metadata = await asyncio.to_thread(download_video, youtube_url, format=format, quality=quality)
+        # Check /tmp storage limit
+        check_storage_limit()
         
-        if not os.path.exists(filename):
-            raise HTTPException(status_code=400, detail=f"Downloaded file not found: {filename}")
-        
-        s3_url, presigned_url = await asyncio.to_thread(upload_to_mock_s3, filename, sanitized_id, timestamp, format)
-        
-        video_id = await asyncio.to_thread(insert_metadata, metadata, s3_url)
-        
-        if os.path.exists(filename):
-            await asyncio.to_thread(os.remove, filename)
-        
-        print(f"Download link: {presigned_url}")
+        # Dispatch Celery task in the background
+        task = download_video_task.delay(youtube_url, format, quality)
         
         return {
-            "status": "success",
-            "video_id": video_id,
-            "s3_url": s3_url,
-            "download_link": presigned_url
+            "status": "download_started",
+            "task_id": task.id
         }
-    except HTTPException as e:
-        if "has already been downloaded" in str(e.detail):
-            print(f"[download] {e.detail.split(': ')[1]}")
-        raise e
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Download failed: {str(e)}")
+        print(f"[debug] General Exception: {str(e)}")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "status": "failed",
+                "reason": f"Task dispatch failed: {str(e)}"
+            }
+        )

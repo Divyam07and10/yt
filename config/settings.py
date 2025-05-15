@@ -13,3 +13,5 @@ DB_PORT = os.getenv("DB_PORT", "5432")
 DB_NAME = os.getenv("DB_NAME", "youtube")
 DB_USER = os.getenv("DB_USERNAME", "postgres")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "secret")
+
+MAX_VIDEO_SIZE = 100 * 1024 * 1024  # 100MB

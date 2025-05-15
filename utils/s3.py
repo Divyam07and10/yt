@@ -17,7 +17,8 @@ def upload_to_mock_s3(file_path: str, youtube_id: str, timestamp: str, format: s
             except:
                 s3_client.create_bucket(Bucket=MOCK_S3_BUCKET)
             
-            object_name = f"videos/{youtube_id}_{timestamp}.{format}"
+            # Use the filename's basename without videos/ prefix
+            object_name = os.path.basename(file_path)
             s3_client.upload_file(file_path, MOCK_S3_BUCKET, object_name)
             s3_url = f"s3://{MOCK_S3_BUCKET}/{object_name}"
             
